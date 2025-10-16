@@ -50,22 +50,6 @@ uniform float uGrainStrength;
 uniform float uGrainScale;
 uniform float uTime;
 
-// PBR Textures
-uniform sampler2D uDiffuseTexture;
-uniform sampler2D uNormalTexture;
-uniform sampler2D uAoRoughMetalTexture;
-uniform float uUseDiffuseTexture;
-uniform float uUseNormalTexture;
-uniform float uUseAoRoughMetalTexture;
-uniform float uDiffuseOpacity;
-uniform float uNormalStrength;
-uniform float uRoughnessStrength;
-uniform float uMetalnessStrength;
-uniform float uAoStrength;
-
-// Debug visualization modes
-uniform float uDebugMode; // 0=off, 1=AO only, 2=Roughness only, 3=Metalness only, 4=Normal
-
 varying float vElevation;
 varying vec2 vUv;
 varying vec3 vViewPosition;
@@ -184,172 +168,53 @@ void main() {
   float elevationShade = vElevation * 0.3;
   finalColor *= (1.0 + elevationShade * 0.5);
   
-  // Debug mode check FIRST - show texture channels directly if in debug mode
-  if(uDebugMode > 0.5) {
-    // Debug modes for AO/Rough/Metal texture
-    if(uUseAoRoughMetalTexture > 0.5) {
-      vec4 armTexture = texture2D(uAoRoughMetalTexture, vUv);
-      
-      if(uDebugMode < 1.5) {
-        // Show AO only (Red channel)
-        finalColor = vec3(armTexture.r);
-      } else if(uDebugMode < 2.5) {
-        // Show Roughness only (Green channel)
-        finalColor = vec3(armTexture.g);
-      } else if(uDebugMode < 3.5) {
-        // Show Metalness only (Blue channel)
-        finalColor = vec3(armTexture.b);
-      }
-    } else {
-      // No texture loaded - show fallback patterns
-      if(uDebugMode < 1.5) {
-        // Show AO fallback (gradient)
-        finalColor = vec3(vUv.x * 0.5 + 0.5);
-      } else if(uDebugMode < 2.5) {
-        // Show Roughness fallback (gradient)
-        finalColor = vec3(vUv.y * 0.5 + 0.5);
-      } else if(uDebugMode < 3.5) {
-        // Show Metalness fallback (gradient)
-        finalColor = vec3((vUv.x + vUv.y) * 0.25 + 0.5);
-      }
-    }
-    
-    // Debug mode for Normal texture
-    if(uDebugMode > 3.5 && uDebugMode < 4.5) {
-      if(uUseNormalTexture > 0.5) {
-        vec4 normalColor = texture2D(uNormalTexture, vUv);
-        finalColor = normalColor.rgb;
-      } else {
-        // No normal texture - show UV coordinates as color
-        finalColor = vec3(vUv.x, vUv.y, 0.5);
-      }
-    }
-  } else {
-    // Normal rendering mode - apply all effects
-    
-    // Apply diffuse texture if available
-    if(uUseDiffuseTexture > 0.5) {
-      vec4 diffuseColor = texture2D(uDiffuseTexture, vUv);
-      // Mix texture with gradient colors based on diffuse opacity
-      // Make this effect much more visible
-      finalColor = mix(finalColor, diffuseColor.rgb, uDiffuseOpacity);
-      // Add a debug tint to show when diffuse is active
-      if(uDiffuseOpacity > 0.1) {
-        finalColor.r += 0.1 * uDiffuseOpacity; // Slight red tint to show it's working
-      }
-    }
-    
-    // Apply normal map (much more dramatic effect)
-    vec3 normal = vWorldNormal;
-    if(uUseNormalTexture > 0.5 && uNormalStrength > 0.0) {
-      vec4 normalColor = texture2D(uNormalTexture, vUv);
-      
-      // Convert normal map to perturbation (from 0-1 to -1 to 1)
-      vec3 normalVariation = (normalColor.rgb - 0.5) * 2.0;
-      // Apply to world normal
-      normal = normalize(vWorldNormal + normalVariation * uNormalStrength);
-    }
-    
-    // Calculate lighting with proper normal
-    vec3 lightDirection = normalize(uLightPosition - vWorldPosition);
-    vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
-    
-    // Use double-sided normal for fabric (light both sides)
-    vec3 lightingNormal = normal;
-    float normalDotLight = dot(lightingNormal, lightDirection);
-    
-    // If front face is not lit, try back face
-    if (normalDotLight < 0.0) {
-      lightingNormal = -normal;
-      normalDotLight = -normalDotLight;
-    }
-    
-    vec3 totalLight = vec3(0.0);
-    
-    // Point lighting (only when environment lighting is disabled)
-    if (uUseEnvironmentLighting < 0.5) {
-      // Diffuse lighting (now works from both sides)
-      float diffuse = max(normalDotLight, 0.0);
-      vec3 diffuseLight = uLightColor * diffuse * uLightIntensity;
-      
-      // Specular lighting (Blinn-Phong) - use the correct normal for specular
-      vec3 halfwayDir = normalize(lightDirection + viewDirection);
-      float specular = pow(max(dot(lightingNormal, halfwayDir), 0.0), uShininess);
-      vec3 specularLight = uLightColor * specular * uSpecularStrength * uLightIntensity;
-      
-      // Combine point light
-      totalLight = diffuseLight + specularLight;
-    }
-    
-    // Add environment lighting if enabled
-    if (uUseEnvironmentLighting > 0.5) {
-      // Sample environment map using reflection vector
-      vec3 reflectDir = reflect(-viewDirection, normal);
-      vec2 envUV = vec2(
-        atan(reflectDir.z, reflectDir.x) / (2.0 * 3.14159) + 0.5,
-        acos(reflectDir.y) / 3.14159
-      );
-      vec3 envColor = texture2D(uEnvironmentMap, envUV).rgb;
-      vec3 envLight = envColor * uEnvironmentIntensity;
-      totalLight += envLight;
-    }
-    
-    // Apply lighting to the textured color
-    finalColor *= totalLight;
-    
-    // Apply AO/Roughness/Metalness texture
-    if(uUseAoRoughMetalTexture > 0.5) {
-      vec4 armTexture = texture2D(uAoRoughMetalTexture, vUv);
-      float ao = armTexture.r;
-      float roughness = armTexture.g;
-      float metalness = armTexture.b;
-      
-      // AO: Creates VERY deep shadows in occluded areas
-      if(uAoStrength > 0.0) {
-        float aoDarkening = mix(1.0, ao * 0.05 + 0.02, uAoStrength); // Even more dramatic
-        finalColor *= aoDarkening;
-        // Add debug tint
-        if(uAoStrength > 0.1) {
-          finalColor.b += 0.2 * uAoStrength; // Blue tint to show AO is working
-        }
-      }
-      
-      // Roughness: EXTREMELY affects surface brightness
-      if(uRoughnessStrength > 0.0) {
-        float smoothness = 1.0 - roughness;
-        // Smooth = up to 5x brighter, Rough = down to 0.05x brightness
-        float roughnessFactor = mix(1.0, pow(smoothness, 1.0) * 5.0 + 0.05, uRoughnessStrength);
-        finalColor *= roughnessFactor;
-        // Add debug tint
-        if(uRoughnessStrength > 0.1) {
-          finalColor.g += 0.15 * uRoughnessStrength; // Green tint to show roughness is working
-        }
-      }
-      
-      // Metalness: Creates VERY strong metallic appearance
-      if(uMetalnessStrength > 0.0 && metalness > 0.01) {
-        float metalFactor = metalness * uMetalnessStrength;
-        
-        // Metallic surfaces are highly reflective
-        vec3 metallicTint = vec3(1.5, 1.6, 1.7); // Even stronger cool metallic sheen
-        
-        // Calculate luminance for desaturation
-        float lum = dot(finalColor, vec3(0.299, 0.587, 0.114));
-        
-        // Metals are highly reflective and desaturated
-        vec3 desaturatedColor = mix(finalColor, vec3(lum), metalFactor);
-        vec3 metallicColor = desaturatedColor * metallicTint * (4.0 + metalFactor * 3.0);
-        
-        // Strong blend based on metalness
-        finalColor = mix(finalColor, metallicColor, metalFactor);
-        
-        // Add debug tint
-        if(uMetalnessStrength > 0.1) {
-          finalColor.r += 0.1 * uMetalnessStrength; // Red tint to show metalness is working
-        }
-      }
-    }
+  // Calculate lighting with world normal
+  vec3 normal = vWorldNormal;
+  vec3 lightDirection = normalize(uLightPosition - vWorldPosition);
+  vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+  
+  // Use double-sided normal for fabric (light both sides)
+  vec3 lightingNormal = normal;
+  float normalDotLight = dot(lightingNormal, lightDirection);
+  
+  // If front face is not lit, try back face
+  if (normalDotLight < 0.0) {
+    lightingNormal = -normal;
+    normalDotLight = -normalDotLight;
   }
+  
+  vec3 totalLight = vec3(0.0);
+  
+  // Point lighting (only when environment lighting is disabled)
+  if (uUseEnvironmentLighting < 0.5) {
+    // Diffuse lighting (now works from both sides)
+    float diffuse = max(normalDotLight, 0.0);
+    vec3 diffuseLight = uLightColor * diffuse * uLightIntensity;
+    
+    // Specular lighting (Blinn-Phong) - use the correct normal for specular
+    vec3 halfwayDir = normalize(lightDirection + viewDirection);
+    float specular = pow(max(dot(lightingNormal, halfwayDir), 0.0), uShininess);
+    vec3 specularLight = uLightColor * specular * uSpecularStrength * uLightIntensity;
+    
+    // Combine point light
+    totalLight = diffuseLight + specularLight;
+  }
+  
+  // Add environment lighting if enabled
+  if (uUseEnvironmentLighting > 0.5) {
+    // Sample environment map using reflection vector
+    vec3 reflectDir = reflect(-viewDirection, normal);
+    vec2 envUV = vec2(
+      atan(reflectDir.z, reflectDir.x) / (2.0 * 3.14159) + 0.5,
+      acos(reflectDir.y) / 3.14159
+    );
+    vec3 envColor = texture2D(uEnvironmentMap, envUV).rgb;
+    vec3 envLight = envColor * uEnvironmentIntensity;
+    totalLight += envLight;
+  }
+  
+  // Apply lighting to the color
+  finalColor *= totalLight;
   
   // Calculate depth-based darkening with softer falloff
   float depth = length(vViewPosition);
