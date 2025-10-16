@@ -33,6 +33,23 @@ uniform float uBrightness;
 uniform vec3 uAmbientColor;
 uniform float uAmbientStrength;
 
+// Real-time lighting
+uniform vec3 uLightPosition;
+uniform vec3 uLightColor;
+uniform float uLightIntensity;
+uniform float uSpecularStrength;
+uniform float uShininess;
+
+// Environment lighting
+uniform sampler2D uEnvironmentMap;
+uniform float uUseEnvironmentLighting;
+uniform float uEnvironmentIntensity;
+
+// Grain/noise effect
+uniform float uGrainStrength;
+uniform float uGrainScale;
+uniform float uTime;
+
 // PBR Textures
 uniform sampler2D uDiffuseTexture;
 uniform sampler2D uNormalTexture;
@@ -52,13 +69,57 @@ uniform float uDebugMode; // 0=off, 1=AO only, 2=Roughness only, 3=Metalness onl
 varying float vElevation;
 varying vec2 vUv;
 varying vec3 vViewPosition;
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+
+// Simple noise function for grain effect
+float random(vec2 st) {
+  return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+}
+
+// Improved 2D noise
+float noise(vec2 st) {
+  vec2 i = floor(st);
+  vec2 f = fract(st);
+  
+  float a = random(i);
+  float b = random(i + vec2(1.0, 0.0));
+  float c = random(i + vec2(0.0, 1.0));
+  float d = random(i + vec2(1.0, 1.0));
+  
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  
+  return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+// Fractal noise for more organic grain
+float fbm(vec2 st) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  float frequency = 1.0;
+  
+  for(int i = 0; i < 4; i++) {
+    value += amplitude * noise(st * frequency);
+    frequency *= 2.0;
+    amplitude *= 0.5;
+  }
+  
+  return value;
+}
 
 void main() {
-  // Calculate border radius effect (corner clipping for circular shape)
-  vec2 centerDist = abs(vUv - 0.5);
+  // Calculate world space position for circular clipping
+  // Plane is 2x2 units, UV 0-1 maps to -1 to 1
+  vec2 worldPos = (vUv - 0.5) * 2.0;
+  float distFromCenter = length(worldPos);
   
-  // Distance from center to corner
-  float cornerDist = length(max(centerDist - vec2(0.5 - uBorderRadius), 0.0));
+  // Map uBorderRadius (0-1) to effective radius (0 to sqrt(2) ≈ 1.414)
+  float effectiveRadius = uBorderRadius * 1.414;
+  
+  // Discard fragments outside the circle
+  if (distFromCenter > effectiveRadius) {
+    discard;
+  }
   
   // Calculate color based on distance from 7 color centers
   vec3 finalColor = vec3(0.0);
@@ -110,6 +171,18 @@ void main() {
   if(totalWeight > 0.0) {
     finalColor /= totalWeight;
   }
+  
+  // Apply subtle grain/noise texture for fabric realism
+  vec2 grainUv = vUv * uGrainScale + uTime * 0.01;
+  float grain = fbm(grainUv);
+  grain = grain * 2.0 - 1.0; // Remap to -1 to 1
+  
+  // Apply grain to color with subtle variation
+  finalColor += grain * uGrainStrength * 0.15;
+  
+  // Add elevation-based subtle shading for more depth
+  float elevationShade = vElevation * 0.3;
+  finalColor *= (1.0 + elevationShade * 0.5);
   
   // Debug mode check FIRST - show texture channels directly if in debug mode
   if(uDebugMode > 0.5) {
@@ -167,17 +240,62 @@ void main() {
     }
     
     // Apply normal map (much more dramatic effect)
+    vec3 normal = vWorldNormal;
     if(uUseNormalTexture > 0.5 && uNormalStrength > 0.0) {
       vec4 normalColor = texture2D(uNormalTexture, vUv);
       
       // Convert normal map to perturbation (from 0-1 to -1 to 1)
       vec3 normalVariation = (normalColor.rgb - 0.5) * 2.0;
-      // Apply VERY strong color variation based on normals
-      finalColor += normalVariation * 0.5 * uNormalStrength;
-      // Also affect brightness dramatically
-      float normalInfluence = (normalVariation.b + 1.0) * 0.5; // Use blue channel
-      finalColor *= mix(1.0, normalInfluence * 2.0 + 0.3, uNormalStrength);
+      // Apply to world normal
+      normal = normalize(vWorldNormal + normalVariation * uNormalStrength);
     }
+    
+    // Calculate lighting with proper normal
+    vec3 lightDirection = normalize(uLightPosition - vWorldPosition);
+    vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+    
+    // Use double-sided normal for fabric (light both sides)
+    vec3 lightingNormal = normal;
+    float normalDotLight = dot(lightingNormal, lightDirection);
+    
+    // If front face is not lit, try back face
+    if (normalDotLight < 0.0) {
+      lightingNormal = -normal;
+      normalDotLight = -normalDotLight;
+    }
+    
+    vec3 totalLight = vec3(0.0);
+    
+    // Point lighting (only when environment lighting is disabled)
+    if (uUseEnvironmentLighting < 0.5) {
+      // Diffuse lighting (now works from both sides)
+      float diffuse = max(normalDotLight, 0.0);
+      vec3 diffuseLight = uLightColor * diffuse * uLightIntensity;
+      
+      // Specular lighting (Blinn-Phong) - use the correct normal for specular
+      vec3 halfwayDir = normalize(lightDirection + viewDirection);
+      float specular = pow(max(dot(lightingNormal, halfwayDir), 0.0), uShininess);
+      vec3 specularLight = uLightColor * specular * uSpecularStrength * uLightIntensity;
+      
+      // Combine point light
+      totalLight = diffuseLight + specularLight;
+    }
+    
+    // Add environment lighting if enabled
+    if (uUseEnvironmentLighting > 0.5) {
+      // Sample environment map using reflection vector
+      vec3 reflectDir = reflect(-viewDirection, normal);
+      vec2 envUV = vec2(
+        atan(reflectDir.z, reflectDir.x) / (2.0 * 3.14159) + 0.5,
+        acos(reflectDir.y) / 3.14159
+      );
+      vec3 envColor = texture2D(uEnvironmentMap, envUV).rgb;
+      vec3 envLight = envColor * uEnvironmentIntensity;
+      totalLight += envLight;
+    }
+    
+    // Apply lighting to the textured color
+    finalColor *= totalLight;
     
     // Apply AO/Roughness/Metalness texture
     if(uUseAoRoughMetalTexture > 0.5) {
@@ -233,23 +351,29 @@ void main() {
     }
   }
   
-  // Calculate depth-based darkening (closer to camera = darker for more natural layering)
+  // Calculate depth-based darkening with softer falloff
   float depth = length(vViewPosition);
-  float depthFactor = 1.0 - smoothstep(0.5, 3.0, depth) * uDepthDarkening;
-  finalColor *= depthFactor;
+  float depthFactor = 1.0 - smoothstep(0.3, 4.0, depth) * uDepthDarkening * 0.7;
   
-  // Apply lighting controls (ambient + brightness)
+  // Add subtle ambient occlusion based on elevation
+  float ao = 1.0 - abs(vElevation) * 0.4;
+  ao = smoothstep(0.5, 1.0, ao);
+  
+  // Combine depth and AO for softer, more natural shadows
+  float shadowFactor = depthFactor * ao;
+  finalColor *= shadowFactor;
+  
+  // Apply lighting controls (ambient + brightness) with softer effect
   vec3 ambientLight = uAmbientColor * uAmbientStrength;
-  finalColor = finalColor * uBrightness + ambientLight;
+  finalColor = finalColor * uBrightness + ambientLight * 0.5;
   
-  // Apply smoother color transitions using smoothstep
-  // This reduces harsh color boundaries
-  float edgeSmoothness = 0.15;
-  float smoothBorder = smoothstep(uBorderRadius - edgeSmoothness, uBorderRadius + edgeSmoothness, cornerDist);
-  float smoothBorderFactor = 1.0 - smoothBorder;
+  // Subtle color desaturation in darker areas for realism
+  float luminance = dot(finalColor, vec3(0.299, 0.587, 0.114));
+  float desatAmount = (1.0 - shadowFactor) * 0.3;
+  finalColor = mix(finalColor, vec3(luminance), desatAmount);
   
-  // Apply border radius to opacity
-  float finalOpacity = uFabricOpacity * smoothBorderFactor;
+  // Clamp to prevent overexposure
+  finalColor = clamp(finalColor, 0.0, 1.0);
   
-  gl_FragColor = vec4(finalColor, finalOpacity);
+  gl_FragColor = vec4(finalColor, uFabricOpacity);
 }

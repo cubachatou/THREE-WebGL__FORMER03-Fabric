@@ -2,8 +2,9 @@ import GUI from 'lil-gui'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
-import waterVertexFragment from './shaders/water/fragment.glsl'
-import waterVertexShader from './shaders/water/vertex.glsl'
+import gsap from 'gsap'
+import fabricVertexFragment from './shaders/fabric/fragment.glsl'
+import fabricVertexShader from './shaders/fabric/vertex.glsl'
 
 /**
  * Base
@@ -22,45 +23,53 @@ const scene = new THREE.Scene()
 debugObject.backgroundColor = '#000000'
 scene.background = new THREE.Color(debugObject.backgroundColor)
 
+// Initialize colors
+debugObject.ambientColor = '#febebe'
+debugObject.lightColor = '#ffffff'
+
+// Light helper variables (global scope)
+let lightHelper = null
+let lightHelperLine = null
+
 /**
- * Water
+ * Fabric
  */
 // Geometry
-const waterGeometry = new THREE.PlaneGeometry(2, 2, 512, 512)
+const fabricGeometry = new THREE.PlaneGeometry(2, 2, 512, 512)
 
 // 7 Fabric Colors
-debugObject.color1 = '#ff6b9d'
+debugObject.color1 = '#d95959'
 debugObject.color2 = '#c651ff'
 debugObject.color3 = '#4e9fff'
-debugObject.color4 = '#00d4ff'
-debugObject.color5 = '#5fffd4'
-debugObject.color6 = '#9dff00'
+debugObject.color4 = '#ff6bd0'
+debugObject.color5 = '#7ab8a8'
+debugObject.color6 = '#fbff00'
 debugObject.color7 = '#00ff88'
 
 // Material
-const waterMaterial = new THREE.ShaderMaterial({
-  vertexShader: waterVertexShader,
-  fragmentShader: waterVertexFragment,
+const fabricMaterial = new THREE.ShaderMaterial({
+  vertexShader: fabricVertexShader,
+  fragmentShader: fabricVertexFragment,
   transparent: true,
   side: THREE.DoubleSide,
   depthTest: true,
-  depthWrite: false,
+  depthWrite: true,
   blending: THREE.NormalBlending,
   premultipliedAlpha: false,
   uniforms: {
     uTime: { value: 0 },
 
     uBugWavesElevation: { value: 0.2 },
-    uBigWavesFrequency: { value: new THREE.Vector2(4, 1.5) },
-    uBigWavesSpeed: { value: 0.5 },
+    uBigWavesFrequency: { value: new THREE.Vector2(3.75,3.75) },
+    uBigWavesSpeed: { value: 0.15 },
 
     uSmallWavesElevation: { value: 0.15 },
     uSmallWavesFrequency: { value: 3 },
     uSmallWavesSpeed: { value: 0.15 },
-    uSmallWavesIterations: { value: 4 },
+    uSmallWavesIterations: { value: 2 },
 
     uFabricStiffness: { value: 1.0 },
-    uFabricDrape: { value: 0.05 },
+    uFabricDrape: { value: 0 },
 
     // PBR Textures
     uDiffuseTexture: { value: null },
@@ -87,70 +96,197 @@ const waterMaterial = new THREE.ShaderMaterial({
 
     // Color centers (UV coordinates 0-1)
     uColorCenter1: { value: new THREE.Vector2(0.1, 0.1) },
-    uColorCenter2: { value: new THREE.Vector2(0.5, 0.1) },
-    uColorCenter3: { value: new THREE.Vector2(0.9, 0.1) },
+    uColorCenter2: { value: new THREE.Vector2(0.8, 0.2) },
+    uColorCenter3: { value: new THREE.Vector2(0.85, 0.5) },
     uColorCenter4: { value: new THREE.Vector2(0.25, 0.5) },
-    uColorCenter5: { value: new THREE.Vector2(0.75, 0.5) },
-    uColorCenter6: { value: new THREE.Vector2(0.3, 0.9) },
-    uColorCenter7: { value: new THREE.Vector2(0.7, 0.9) },
+    uColorCenter5: { value: new THREE.Vector2(0.6, 0.6) },
+    uColorCenter6: { value: new THREE.Vector2(0.4, 0.9) },
+    uColorCenter7: { value: new THREE.Vector2(0.85, 0.85) },
 
-    uColorRadius: { value: 0.6 },
-    uFabricOpacity: { value: 0.85 },
-    uBorderRadius: { value: 0.05 },
-    uDepthDarkening: { value: 0.3 },
+    uColorRadius: { value: 0.45 },
+    uFabricOpacity: { value: 0.9 },
+    uBorderRadius: { value: 0.9 },
+    uDepthDarkening: { value: 0.5 },
     
     // Lighting controls that actually affect the shader
-    uBrightness: { value: 1.0 },
-    uAmbientColor: { value: new THREE.Color('#ffffff') },
-    uAmbientStrength: { value: 0.3 }
+    uBrightness: { value: 1 },
+    uAmbientColor: { value: new THREE.Color('#febebe') },
+    uAmbientStrength: { value: 0.3 },
+    
+    // Real-time lighting
+    uLightPosition: { value: new THREE.Vector3(0, 15, 0) },
+    uLightColor: { value: new THREE.Color('#ffffff') },
+    uLightIntensity: { value: 1.0 },
+    uSpecularStrength: { value: 0.5 },
+    uShininess: { value: 32.0 },
+    
+    // Environment lighting
+    uEnvironmentMap: { value: null },
+    uUseEnvironmentLighting: { value: 0.0 },
+    uEnvironmentIntensity: { value: 1.0 },
+    
+    // Grain/texture effect
+    uGrainStrength: { value: 0.3 },
+    uGrainScale: { value: 10.0 }
   }
 })
 
 // Debug - Fabric Movement
 const fabricFolder = gui.addFolder('Fabric Movement')
-fabricFolder.add(waterMaterial.uniforms.uBugWavesElevation, 'value').min(0).max(1).step(0.001).name('Wave Elevation')
-fabricFolder.add(waterMaterial.uniforms.uBigWavesFrequency.value, 'x').min(0).max(10).step(0.001).name('Wave Frequency X')
-fabricFolder.add(waterMaterial.uniforms.uBigWavesFrequency.value, 'y').min(0).max(10).step(0.001).name('Wave Frequency Y')
-fabricFolder.add(waterMaterial.uniforms.uBigWavesSpeed, 'value').min(0).max(3).step(0.001).name('Wave Speed')
-fabricFolder.add(waterMaterial.uniforms.uSmallWavesElevation, 'value').min(0).max(1).step(0.001).name('Ripple Elevation')
-fabricFolder.add(waterMaterial.uniforms.uSmallWavesFrequency, 'value').min(0).max(30).step(0.001).name('Ripple Frequency')
-fabricFolder.add(waterMaterial.uniforms.uSmallWavesSpeed, 'value').min(0).max(4).step(0.001).name('Ripple Speed')
-fabricFolder.add(waterMaterial.uniforms.uSmallWavesIterations, 'value').min(0).max(5).step(1).name('Ripple Iterations')
-fabricFolder.add(waterMaterial.uniforms.uFabricStiffness, 'value').min(0).max(2).step(0.01).name('Fabric Stiffness')
-fabricFolder.add(waterMaterial.uniforms.uFabricDrape, 'value').min(0).max(0.5).step(0.001).name('Fabric Drape')
+fabricFolder.close()
+fabricFolder.add(fabricMaterial.uniforms.uBugWavesElevation, 'value').min(0).max(1).step(0.001).name('Wave Elevation')
+fabricFolder.add(fabricMaterial.uniforms.uBigWavesFrequency.value, 'x').min(0).max(10).step(0.001).name('Wave Frequency X')
+fabricFolder.add(fabricMaterial.uniforms.uBigWavesFrequency.value, 'y').min(0).max(10).step(0.001).name('Wave Frequency Y')
+fabricFolder.add(fabricMaterial.uniforms.uBigWavesSpeed, 'value').min(0).max(3).step(0.001).name('Wave Speed')
+fabricFolder.add(fabricMaterial.uniforms.uSmallWavesElevation, 'value').min(0).max(1).step(0.001).name('Ripple Elevation')
+fabricFolder.add(fabricMaterial.uniforms.uSmallWavesFrequency, 'value').min(0).max(30).step(0.001).name('Ripple Frequency')
+fabricFolder.add(fabricMaterial.uniforms.uSmallWavesSpeed, 'value').min(0).max(4).step(0.001).name('Ripple Speed')
+fabricFolder.add(fabricMaterial.uniforms.uSmallWavesIterations, 'value').min(0).max(5).step(1).name('Ripple Iterations')
+fabricFolder.add(fabricMaterial.uniforms.uFabricStiffness, 'value').min(0).max(2).step(0.01).name('Fabric Stiffness')
+fabricFolder.add(fabricMaterial.uniforms.uFabricDrape, 'value').min(0).max(0.5).step(0.001).name('Fabric Drape')
 
 // Reset fabric movement
 debugObject.resetFabricMovement = () => {
-  waterMaterial.uniforms.uBugWavesElevation.value = 0.2
-  waterMaterial.uniforms.uBigWavesFrequency.value.set(4, 1.5)
-  waterMaterial.uniforms.uBigWavesSpeed.value = 0.5
-  waterMaterial.uniforms.uSmallWavesElevation.value = 0.15
-  waterMaterial.uniforms.uSmallWavesFrequency.value = 3
-  waterMaterial.uniforms.uSmallWavesSpeed.value = 0.15
-  waterMaterial.uniforms.uSmallWavesIterations.value = 4
-  waterMaterial.uniforms.uFabricStiffness.value = 1.0
-  waterMaterial.uniforms.uFabricDrape.value = 0.05
+  fabricMaterial.uniforms.uBugWavesElevation.value = 0.2
+  fabricMaterial.uniforms.uBigWavesFrequency.value.set(4, 1.5)
+  fabricMaterial.uniforms.uBigWavesSpeed.value = 0.5
+  fabricMaterial.uniforms.uSmallWavesElevation.value = 0.15
+  fabricMaterial.uniforms.uSmallWavesFrequency.value = 3
+  fabricMaterial.uniforms.uSmallWavesSpeed.value = 0.15
+  fabricMaterial.uniforms.uSmallWavesIterations.value = 4
+  fabricMaterial.uniforms.uFabricStiffness.value = 1.0
+  fabricMaterial.uniforms.uFabricDrape.value = 0.05
 }
 fabricFolder.add(debugObject, 'resetFabricMovement').name('Reset Fabric Movement')
 
 // Debug - Appearance
 const appearanceFolder = gui.addFolder('Appearance')
-appearanceFolder.add(waterMaterial.uniforms.uFabricOpacity, 'value').min(0).max(1).step(0.01).name('Opacity')
-appearanceFolder.add(waterMaterial.uniforms.uBorderRadius, 'value').min(0).max(0.5).step(0.001).name('Border Radius')
-appearanceFolder.add(waterMaterial.uniforms.uColorRadius, 'value').min(0.1).max(2).step(0.01).name('Color Blend Radius')
-appearanceFolder.add(waterMaterial.uniforms.uDepthDarkening, 'value').min(0).max(1).step(0.01).name('Depth Darkening')
+appearanceFolder.close()
+appearanceFolder.add(fabricMaterial.uniforms.uFabricOpacity, 'value').min(0).max(1).step(0.01).name('Opacity')
+appearanceFolder.add(fabricMaterial.uniforms.uBorderRadius, 'value').min(0).max(1).step(0.001).name('Circle Radius')
+appearanceFolder.add(fabricMaterial.uniforms.uDepthDarkening, 'value').min(0).max(1).step(0.01).name('Depth Darkening')
+appearanceFolder.add(fabricMaterial.uniforms.uGrainStrength, 'value').min(0).max(1).step(0.01).name('Grain Strength')
+appearanceFolder.add(fabricMaterial.uniforms.uGrainScale, 'value').min(10).max(200).step(1).name('Grain Scale')
 
 // Debug - Lighting & Environment Controls (affects shader directly)
 const lightingFolder = gui.addFolder('Lighting & Environment')
+lightingFolder.close()
 
 // Overall brightness
-lightingFolder.add(waterMaterial.uniforms.uBrightness, 'value').min(0).max(3).step(0.1).name('Brightness')
+lightingFolder.add(fabricMaterial.uniforms.uBrightness, 'value').min(0).max(3).step(0.1).name('Brightness')
 
 // Ambient lighting
-lightingFolder.add(waterMaterial.uniforms.uAmbientStrength, 'value').min(0).max(1).step(0.01).name('Ambient Strength')
-debugObject.ambientColor = '#ffffff'
+lightingFolder.add(fabricMaterial.uniforms.uAmbientStrength, 'value').min(0).max(1).step(0.01).name('Ambient Strength')
 lightingFolder.addColor(debugObject, 'ambientColor').name('Ambient Color')
-  .onChange(() => waterMaterial.uniforms.uAmbientColor.value.set(debugObject.ambientColor))
+  .onChange(() => fabricMaterial.uniforms.uAmbientColor.value.set(debugObject.ambientColor))
+
+// Point lighting controls (will be shown/hidden based on environment lighting)
+const lightXController = lightingFolder.add(fabricMaterial.uniforms.uLightPosition.value, 'x').min(-15).max(15).step(0.1).name('Light X')
+  .onChange(() => updateLightHelper())
+
+const lightYController = lightingFolder.add(fabricMaterial.uniforms.uLightPosition.value, 'y').min(-15).max(15).step(0.1).name('Light Y')
+  .onChange(() => updateLightHelper())
+
+const lightZController = lightingFolder.add(fabricMaterial.uniforms.uLightPosition.value, 'z').min(-15).max(15).step(0.1).name('Light Z')
+  .onChange(() => updateLightHelper())
+
+const lightIntensityController = lightingFolder.add(fabricMaterial.uniforms.uLightIntensity, 'value').min(0).max(5).step(0.1).name('Light Intensity')
+
+const lightColorController = lightingFolder.addColor(debugObject, 'lightColor').name('Light Color')
+  .onChange(() => {
+    fabricMaterial.uniforms.uLightColor.value.set(debugObject.lightColor)
+    updateLightHelper()
+  })
+
+const specularStrengthController = lightingFolder.add(fabricMaterial.uniforms.uSpecularStrength, 'value').min(0).max(2).step(0.01).name('Specular Strength')
+
+const shininessController = lightingFolder.add(fabricMaterial.uniforms.uShininess, 'value').min(1).max(256).step(1).name('Shininess')
+
+// Environment lighting controls
+debugObject.useEnvironmentLighting = false
+const environmentLightingController = lightingFolder.add(debugObject, 'useEnvironmentLighting').name('Use Environment Lighting')
+  .onChange((value) => {
+    fabricMaterial.uniforms.uUseEnvironmentLighting.value = value ? 1.0 : 0.0
+    
+    // Enable/disable point lighting controls based on environment lighting
+    if (value) {
+      // Disable point lighting controls when environment lighting is active
+      lightXController.disable()
+      lightYController.disable()
+      lightZController.disable()
+      lightIntensityController.disable()
+      lightColorController.disable()
+      specularStrengthController.disable()
+      shininessController.disable()
+      showLightHelperController.disable()
+    } else {
+      // Enable point lighting controls when environment lighting is inactive
+      lightXController.enable()
+      lightYController.enable()
+      lightZController.enable()
+      lightIntensityController.enable()
+      lightColorController.enable()
+      specularStrengthController.enable()
+      shininessController.enable()
+      showLightHelperController.enable()
+    }
+  })
+
+const environmentIntensityController = lightingFolder.add(fabricMaterial.uniforms.uEnvironmentIntensity, 'value').min(0).max(5).step(0.1).name('Environment Intensity')
+
+// Environment map selection
+debugObject.environmentMaps = {
+  'None': null,
+  'Studio': 'studio',
+  'Forest': 'forest', 
+  'City': 'city',
+  'Sunset': 'sunset',
+  'Beach': 'beach',
+  'Mountain': 'mountain',
+  'Desert': 'desert',
+  'Ocean': 'ocean',
+  'Night': 'night',
+  'Indoor': 'indoor',
+  'Warehouse': 'warehouse',
+  'Arctic': 'arctic',
+  'Tropical': 'tropical'
+}
+debugObject.currentEnvironment = 'None'
+lightingFolder.add(debugObject, 'currentEnvironment', Object.keys(debugObject.environmentMaps)).name('Environment Map')
+  .onChange((value) => {
+    loadEnvironmentMap(debugObject.environmentMaps[value])
+  })
+
+// Custom environment map loader
+debugObject.loadCustomEnvironment = () => {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.hdr,.exr'
+  input.onchange = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      console.log('Loading custom environment map:', file.name)
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        // For simplicity, we'll use a basic loader - in production you'd want proper HDR loading
+        console.log('Custom environment loading not fully implemented - use preset maps')
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+  input.click()
+}
+lightingFolder.add(debugObject, 'loadCustomEnvironment').name('Load Custom Environment')
+
+// Light helper controls
+debugObject.showLightHelper = false
+const showLightHelperController = lightingFolder.add(debugObject, 'showLightHelper').name('Show Light Helper').onChange((value) => {
+  if (value) {
+    createLightHelper()
+  } else {
+    removeLightHelper()
+  }
+})
 
 // Background color
 lightingFolder.addColor(debugObject, 'backgroundColor').name('Background Color')
@@ -172,8 +308,8 @@ debugObject.loadDiffuseTexture = () => {
           event.target.result,
           (texture) => {
             console.log('Diffuse texture loaded successfully!', texture)
-            waterMaterial.uniforms.uDiffuseTexture.value = texture
-            waterMaterial.uniforms.uUseDiffuseTexture.value = 1.0
+            fabricMaterial.uniforms.uDiffuseTexture.value = texture
+            fabricMaterial.uniforms.uUseDiffuseTexture.value = 1.0
           },
           undefined,
           (error) => {
@@ -202,8 +338,8 @@ debugObject.loadNormalTexture = () => {
           event.target.result,
           (texture) => {
             console.log('Normal texture loaded successfully!', texture)
-            waterMaterial.uniforms.uNormalTexture.value = texture
-            waterMaterial.uniforms.uUseNormalTexture.value = 1.0
+            fabricMaterial.uniforms.uNormalTexture.value = texture
+            fabricMaterial.uniforms.uUseNormalTexture.value = 1.0
           },
           undefined,
           (error) => {
@@ -232,9 +368,9 @@ debugObject.loadAoRoughMetalTexture = () => {
           event.target.result,
           (texture) => {
             console.log('AO/Rough/Metal texture loaded successfully!', texture)
-            waterMaterial.uniforms.uAoRoughMetalTexture.value = texture
-            waterMaterial.uniforms.uUseAoRoughMetalTexture.value = 1.0
-            console.log('Texture uniform set:', waterMaterial.uniforms.uUseAoRoughMetalTexture.value)
+            fabricMaterial.uniforms.uAoRoughMetalTexture.value = texture
+            fabricMaterial.uniforms.uUseAoRoughMetalTexture.value = 1.0
+            console.log('Texture uniform set:', fabricMaterial.uniforms.uUseAoRoughMetalTexture.value)
           },
           undefined,
           (error) => {
@@ -249,21 +385,22 @@ debugObject.loadAoRoughMetalTexture = () => {
 }
 
 debugObject.removeDiffuseTexture = () => {
-  waterMaterial.uniforms.uDiffuseTexture.value = null
-  waterMaterial.uniforms.uUseDiffuseTexture.value = 0.0
+  fabricMaterial.uniforms.uDiffuseTexture.value = null
+  fabricMaterial.uniforms.uUseDiffuseTexture.value = 0.0
 }
 
 debugObject.removeNormalTexture = () => {
-  waterMaterial.uniforms.uNormalTexture.value = null
-  waterMaterial.uniforms.uUseNormalTexture.value = 0.0
+  fabricMaterial.uniforms.uNormalTexture.value = null
+  fabricMaterial.uniforms.uUseNormalTexture.value = 0.0
 }
 
 debugObject.removeAoRoughMetalTexture = () => {
-  waterMaterial.uniforms.uAoRoughMetalTexture.value = null
-  waterMaterial.uniforms.uUseAoRoughMetalTexture.value = 0.0
+  fabricMaterial.uniforms.uAoRoughMetalTexture.value = null
+  fabricMaterial.uniforms.uUseAoRoughMetalTexture.value = 0.0
 }
 
 const texturesFolder = gui.addFolder('Textures')
+texturesFolder.close()
 
 // Quick load preset textures
 debugObject.loadPresetTextures = () => {
@@ -276,8 +413,8 @@ debugObject.loadPresetTextures = () => {
     './textures/crepe_satin_diff_1k.png',
     (texture) => {
       console.log('Diffuse loaded!')
-      waterMaterial.uniforms.uDiffuseTexture.value = texture
-      waterMaterial.uniforms.uUseDiffuseTexture.value = 1.0
+      fabricMaterial.uniforms.uDiffuseTexture.value = texture
+      fabricMaterial.uniforms.uUseDiffuseTexture.value = 1.0
     },
     undefined,
     (err) => console.error('Diffuse load error:', err)
@@ -288,8 +425,8 @@ debugObject.loadPresetTextures = () => {
     './textures/crepe_satin_nor_dx_1k.png',
     (texture) => {
       console.log('Normal loaded!')
-      waterMaterial.uniforms.uNormalTexture.value = texture
-      waterMaterial.uniforms.uUseNormalTexture.value = 1.0
+      fabricMaterial.uniforms.uNormalTexture.value = texture
+      fabricMaterial.uniforms.uUseNormalTexture.value = 1.0
     },
     undefined,
     (err) => console.error('Normal load error:', err)
@@ -300,8 +437,8 @@ debugObject.loadPresetTextures = () => {
     './textures/crepe_satin_arm_1k.png',
     (texture) => {
       console.log('AO/Rough/Metal loaded!')
-      waterMaterial.uniforms.uAoRoughMetalTexture.value = texture
-      waterMaterial.uniforms.uUseAoRoughMetalTexture.value = 1.0
+      fabricMaterial.uniforms.uAoRoughMetalTexture.value = texture
+      fabricMaterial.uniforms.uUseAoRoughMetalTexture.value = 1.0
     },
     undefined,
     (err) => {
@@ -313,17 +450,17 @@ debugObject.loadPresetTextures = () => {
 
 texturesFolder.add(debugObject, 'loadPresetTextures').name('⚡ Load Preset Textures')
 
-texturesFolder.add(waterMaterial.uniforms.uDiffuseOpacity, 'value').min(0).max(1).step(0.01).name('Diffuse Opacity').listen()
+texturesFolder.add(fabricMaterial.uniforms.uDiffuseOpacity, 'value').min(0).max(1).step(0.01).name('Diffuse Opacity').listen()
 
 texturesFolder.add(debugObject, 'loadNormalTexture').name('Load Normal Texture')
 texturesFolder.add(debugObject, 'removeNormalTexture').name('Remove Normal')
-texturesFolder.add(waterMaterial.uniforms.uNormalStrength, 'value').min(0).max(2).step(0.01).name('Normal Strength').listen()
+texturesFolder.add(fabricMaterial.uniforms.uNormalStrength, 'value').min(0).max(2).step(0.01).name('Normal Strength').listen()
 
 texturesFolder.add(debugObject, 'loadAoRoughMetalTexture').name('Load AO/Rough/Metal')
 texturesFolder.add(debugObject, 'removeAoRoughMetalTexture').name('Remove AO/Rough/Metal')
-texturesFolder.add(waterMaterial.uniforms.uAoStrength, 'value').min(0).max(1).step(0.01).name('AO Strength').listen()
-texturesFolder.add(waterMaterial.uniforms.uRoughnessStrength, 'value').min(0).max(1).step(0.01).name('Roughness Strength').listen()
-texturesFolder.add(waterMaterial.uniforms.uMetalnessStrength, 'value').min(0).max(1).step(0.01).name('Metalness Strength').listen()
+texturesFolder.add(fabricMaterial.uniforms.uAoStrength, 'value').min(0).max(1).step(0.01).name('AO Strength').listen()
+texturesFolder.add(fabricMaterial.uniforms.uRoughnessStrength, 'value').min(0).max(1).step(0.01).name('Roughness Strength').listen()
+texturesFolder.add(fabricMaterial.uniforms.uMetalnessStrength, 'value').min(0).max(1).step(0.01).name('Metalness Strength').listen()
 
 // Debug visualization modes
 debugObject.debugModes = {
@@ -337,7 +474,7 @@ debugObject.currentDebugMode = 'Off'
 texturesFolder.add(debugObject, 'currentDebugMode', Object.keys(debugObject.debugModes)).name('Debug View').listen()
   .onChange((value) => {
     const modeValue = debugObject.debugModes[value];
-    waterMaterial.uniforms.uDebugMode.value = modeValue;
+    fabricMaterial.uniforms.uDebugMode.value = modeValue;
     console.log('Debug mode changed to:', value, 'value:', modeValue);
     if (value !== 'Off') {
       console.log('⚠️ Debug mode active - texture sliders will not affect appearance until you set Debug View to "Off"');
@@ -346,33 +483,44 @@ texturesFolder.add(debugObject, 'currentDebugMode', Object.keys(debugObject.debu
 
 // Reset appearance
 debugObject.resetAppearance = () => {
-  waterMaterial.uniforms.uFabricOpacity.value = 0.85
-  waterMaterial.uniforms.uBorderRadius.value = 0.05
-  waterMaterial.uniforms.uColorRadius.value = 0.6
-  waterMaterial.uniforms.uDepthDarkening.value = 0.3
+  fabricMaterial.uniforms.uFabricOpacity.value = 0.85
+  fabricMaterial.uniforms.uBorderRadius.value = 1.0
+  fabricMaterial.uniforms.uColorRadius.value = 0.6
+  fabricMaterial.uniforms.uDepthDarkening.value = 0.3
   // Renderer exposure is reset in a separate function after renderer is created
 }
 
 // Reset lighting
 debugObject.resetLighting = () => {
-  waterMaterial.uniforms.uBrightness.value = 1.0
-  waterMaterial.uniforms.uAmbientStrength.value = 0.3
-  debugObject.ambientColor = '#ffffff'
-  waterMaterial.uniforms.uAmbientColor.value.set(debugObject.ambientColor)
+  fabricMaterial.uniforms.uBrightness.value = 1.0
+  fabricMaterial.uniforms.uAmbientStrength.value = 0.3
+  debugObject.ambientColor = '#febebe'
+  fabricMaterial.uniforms.uAmbientColor.value.set(debugObject.ambientColor)
   debugObject.backgroundColor = '#000000'
   scene.background.set(debugObject.backgroundColor)
+  
+  // Reset real-time lighting
+  fabricMaterial.uniforms.uLightPosition.value.set(2, 2, 2)
+  fabricMaterial.uniforms.uLightIntensity.value = 1.0
+  debugObject.lightColor = '#ffffff'
+  fabricMaterial.uniforms.uLightColor.value.set(debugObject.lightColor)
+  fabricMaterial.uniforms.uSpecularStrength.value = 0.5
+  fabricMaterial.uniforms.uShininess.value = 32.0
+  
+  // Update helper if visible
+  updateLightHelper()
 }
 lightingFolder.add(debugObject, 'resetLighting').name('Reset Lighting')
 appearanceFolder.add(debugObject, 'resetAppearance').name('Reset Appearance')
 
 // Reset textures
 debugObject.resetTextures = () => {
-  waterMaterial.uniforms.uDiffuseOpacity.value = 1.0
-  waterMaterial.uniforms.uNormalStrength.value = 1.0
-  waterMaterial.uniforms.uRoughnessStrength.value = 1.0
-  waterMaterial.uniforms.uMetalnessStrength.value = 0.0
-  waterMaterial.uniforms.uAoStrength.value = 1.0
-  waterMaterial.uniforms.uDebugMode.value = 0.0
+  fabricMaterial.uniforms.uDiffuseOpacity.value = 1.0
+  fabricMaterial.uniforms.uNormalStrength.value = 1.0
+  fabricMaterial.uniforms.uRoughnessStrength.value = 1.0
+  fabricMaterial.uniforms.uMetalnessStrength.value = 0.0
+  fabricMaterial.uniforms.uAoStrength.value = 1.0
+  fabricMaterial.uniforms.uDebugMode.value = 0.0
   debugObject.currentDebugMode = 'Off'
 }
 texturesFolder.add(debugObject, 'resetTextures').name('Reset Texture Settings')
@@ -381,74 +529,292 @@ texturesFolder.add(debugObject, 'resetTextures').name('Reset Texture Settings')
 
 // Debug - Colors
 const colorsFolder = gui.addFolder('Colors')
-colorsFolder.addColor(debugObject, 'color1').name('Color 1').onChange(() => waterMaterial.uniforms.uColor1.value.set(debugObject.color1))
-colorsFolder.addColor(debugObject, 'color2').name('Color 2').onChange(() => waterMaterial.uniforms.uColor2.value.set(debugObject.color2))
-colorsFolder.addColor(debugObject, 'color3').name('Color 3').onChange(() => waterMaterial.uniforms.uColor3.value.set(debugObject.color3))
-colorsFolder.addColor(debugObject, 'color4').name('Color 4').onChange(() => waterMaterial.uniforms.uColor4.value.set(debugObject.color4))
-colorsFolder.addColor(debugObject, 'color5').name('Color 5').onChange(() => waterMaterial.uniforms.uColor5.value.set(debugObject.color5))
-colorsFolder.addColor(debugObject, 'color6').name('Color 6').onChange(() => waterMaterial.uniforms.uColor6.value.set(debugObject.color6))
-colorsFolder.addColor(debugObject, 'color7').name('Color 7').onChange(() => waterMaterial.uniforms.uColor7.value.set(debugObject.color7))
+colorsFolder.close()
+colorsFolder.add(fabricMaterial.uniforms.uColorRadius, 'value').min(0.1).max(2).step(0.01).name('Color Blend Radius')
+colorsFolder.addColor(debugObject, 'color1').name('Color 1').onChange(() => fabricMaterial.uniforms.uColor1.value.set(debugObject.color1))
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter1.value, 'x').min(0).max(1).step(0.01).name('Center 1 X')
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter1.value, 'y').min(0).max(1).step(0.01).name('Center 1 Y')
+colorsFolder.addColor(debugObject, 'color2').name('Color 2').onChange(() => fabricMaterial.uniforms.uColor2.value.set(debugObject.color2))
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter2.value, 'x').min(0).max(1).step(0.01).name('Center 2 X')
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter2.value, 'y').min(0).max(1).step(0.01).name('Center 2 Y')
+colorsFolder.addColor(debugObject, 'color3').name('Color 3').onChange(() => fabricMaterial.uniforms.uColor3.value.set(debugObject.color3))
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter3.value, 'x').min(0).max(1).step(0.01).name('Center 3 X')
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter3.value, 'y').min(0).max(1).step(0.01).name('Center 3 Y')
+colorsFolder.addColor(debugObject, 'color4').name('Color 4').onChange(() => fabricMaterial.uniforms.uColor4.value.set(debugObject.color4))
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter4.value, 'x').min(0).max(1).step(0.01).name('Center 4 X')
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter4.value, 'y').min(0).max(1).step(0.01).name('Center 4 Y')
+colorsFolder.addColor(debugObject, 'color5').name('Color 5').onChange(() => fabricMaterial.uniforms.uColor5.value.set(debugObject.color5))
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter5.value, 'x').min(0).max(1).step(0.01).name('Center 5 X')
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter5.value, 'y').min(0).max(1).step(0.01).name('Center 5 Y')
+colorsFolder.addColor(debugObject, 'color6').name('Color 6').onChange(() => fabricMaterial.uniforms.uColor6.value.set(debugObject.color6))
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter6.value, 'x').min(0).max(1).step(0.01).name('Center 6 X')
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter6.value, 'y').min(0).max(1).step(0.01).name('Center 6 Y')
+colorsFolder.addColor(debugObject, 'color7').name('Color 7').onChange(() => fabricMaterial.uniforms.uColor7.value.set(debugObject.color7))
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter7.value, 'x').min(0).max(1).step(0.01).name('Center 7 X')
+colorsFolder.add(fabricMaterial.uniforms.uColorCenter7.value, 'y').min(0).max(1).step(0.01).name('Center 7 Y')
 
 // Reset colors
 debugObject.resetColors = () => {
-  debugObject.color1 = '#ff6b9d'
+  debugObject.color1 = '#d95959'
   debugObject.color2 = '#c651ff'
   debugObject.color3 = '#4e9fff'
-  debugObject.color4 = '#00d4ff'
-  debugObject.color5 = '#5fffd4'
-  debugObject.color6 = '#9dff00'
+  debugObject.color4 = '#ff6bd0'
+  debugObject.color5 = '#7ab8a8'
+  debugObject.color6 = '#fbff00'
   debugObject.color7 = '#00ff88'
-  waterMaterial.uniforms.uColor1.value.set(debugObject.color1)
-  waterMaterial.uniforms.uColor2.value.set(debugObject.color2)
-  waterMaterial.uniforms.uColor3.value.set(debugObject.color3)
-  waterMaterial.uniforms.uColor4.value.set(debugObject.color4)
-  waterMaterial.uniforms.uColor5.value.set(debugObject.color5)
-  waterMaterial.uniforms.uColor6.value.set(debugObject.color6)
-  waterMaterial.uniforms.uColor7.value.set(debugObject.color7)
+  fabricMaterial.uniforms.uColor1.value.set(debugObject.color1)
+  fabricMaterial.uniforms.uColor2.value.set(debugObject.color2)
+  fabricMaterial.uniforms.uColor3.value.set(debugObject.color3)
+  fabricMaterial.uniforms.uColor4.value.set(debugObject.color4)
+  fabricMaterial.uniforms.uColor5.value.set(debugObject.color5)
+  fabricMaterial.uniforms.uColor6.value.set(debugObject.color6)
+  fabricMaterial.uniforms.uColor7.value.set(debugObject.color7)
 }
 colorsFolder.add(debugObject, 'resetColors').name('Reset Colors')
 
-// Debug - Color Centers
-const centersFolder = gui.addFolder('Color Centers')
-centersFolder.add(waterMaterial.uniforms.uColorCenter1.value, 'x').min(0).max(1).step(0.01).name('Center 1 X')
-centersFolder.add(waterMaterial.uniforms.uColorCenter1.value, 'y').min(0).max(1).step(0.01).name('Center 1 Y')
-centersFolder.add(waterMaterial.uniforms.uColorCenter2.value, 'x').min(0).max(1).step(0.01).name('Center 2 X')
-centersFolder.add(waterMaterial.uniforms.uColorCenter2.value, 'y').min(0).max(1).step(0.01).name('Center 2 Y')
-centersFolder.add(waterMaterial.uniforms.uColorCenter3.value, 'x').min(0).max(1).step(0.01).name('Center 3 X')
-centersFolder.add(waterMaterial.uniforms.uColorCenter3.value, 'y').min(0).max(1).step(0.01).name('Center 3 Y')
-centersFolder.add(waterMaterial.uniforms.uColorCenter4.value, 'x').min(0).max(1).step(0.01).name('Center 4 X')
-centersFolder.add(waterMaterial.uniforms.uColorCenter4.value, 'y').min(0).max(1).step(0.01).name('Center 4 Y')
-centersFolder.add(waterMaterial.uniforms.uColorCenter5.value, 'x').min(0).max(1).step(0.01).name('Center 5 X')
-centersFolder.add(waterMaterial.uniforms.uColorCenter5.value, 'y').min(0).max(1).step(0.01).name('Center 5 Y')
-centersFolder.add(waterMaterial.uniforms.uColorCenter6.value, 'x').min(0).max(1).step(0.01).name('Center 6 X')
-centersFolder.add(waterMaterial.uniforms.uColorCenter6.value, 'y').min(0).max(1).step(0.01).name('Center 6 Y')
-centersFolder.add(waterMaterial.uniforms.uColorCenter7.value, 'x').min(0).max(1).step(0.01).name('Center 7 X')
-centersFolder.add(waterMaterial.uniforms.uColorCenter7.value, 'y').min(0).max(1).step(0.01).name('Center 7 Y')
-
 // Reset color centers
 debugObject.resetColorCenters = () => {
-  waterMaterial.uniforms.uColorCenter1.value.set(0.1, 0.1)
-  waterMaterial.uniforms.uColorCenter2.value.set(0.5, 0.1)
-  waterMaterial.uniforms.uColorCenter3.value.set(0.9, 0.1)
-  waterMaterial.uniforms.uColorCenter4.value.set(0.25, 0.5)
-  waterMaterial.uniforms.uColorCenter5.value.set(0.75, 0.5)
-  waterMaterial.uniforms.uColorCenter6.value.set(0.3, 0.9)
-  waterMaterial.uniforms.uColorCenter7.value.set(0.7, 0.9)
+  fabricMaterial.uniforms.uColorCenter1.value.set(0.1, 0.1)
+  fabricMaterial.uniforms.uColorCenter2.value.set(0.5, 0.1)
+  fabricMaterial.uniforms.uColorCenter3.value.set(0.9, 0.1)
+  fabricMaterial.uniforms.uColorCenter4.value.set(0.25, 0.5)
+  fabricMaterial.uniforms.uColorCenter5.value.set(0.75, 0.5)
+  fabricMaterial.uniforms.uColorCenter6.value.set(0.3, 0.9)
+  fabricMaterial.uniforms.uColorCenter7.value.set(0.7, 0.9)
 }
-centersFolder.add(debugObject, 'resetColorCenters').name('Reset Color Centers')
+colorsFolder.add(debugObject, 'resetColorCenters').name('Reset Color Centers')
+
+
+
+// Environment map loader
+function loadEnvironmentMap(mapName) {
+  if (!mapName) {
+    fabricMaterial.uniforms.uEnvironmentMap.value = null
+    return
+  }
+
+  // Create a simple 2D environment texture
+  const texture = createEnvironmentTexture(mapName)
+  fabricMaterial.uniforms.uEnvironmentMap.value = texture
+}
+
+// Create simple environment textures
+function createEnvironmentTexture(type) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 1024
+  canvas.height = 512
+  const ctx = canvas.getContext('2d')
+
+  // Create equirectangular environment map
+  const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0)
+  
+  switch (type) {
+    case 'studio':
+      // Soft studio lighting
+      gradient.addColorStop(0, '#606060')
+      gradient.addColorStop(0.5, '#808080')
+      gradient.addColorStop(1, '#606060')
+      break
+    case 'forest':
+      // Forest environment
+      gradient.addColorStop(0, '#1a4d1a')
+      gradient.addColorStop(0.3, '#2d6b2d')
+      gradient.addColorStop(0.7, '#4a8f4a')
+      gradient.addColorStop(1, '#1a4d1a')
+      break
+    case 'city':
+      // Urban environment
+      gradient.addColorStop(0, '#2c3e50')
+      gradient.addColorStop(0.4, '#34495e')
+      gradient.addColorStop(0.6, '#7f8c8d')
+      gradient.addColorStop(1, '#2c3e50')
+      break
+    case 'sunset':
+      // Warm sunset
+      gradient.addColorStop(0, '#e74c3c')
+      gradient.addColorStop(0.3, '#f39c12')
+      gradient.addColorStop(0.7, '#f1c40f')
+      gradient.addColorStop(1, '#e74c3c')
+      break
+    case 'beach':
+      // Sandy beach
+      gradient.addColorStop(0, '#f4d03f')
+      gradient.addColorStop(0.4, '#85c1e9')
+      gradient.addColorStop(0.8, '#3498db')
+      gradient.addColorStop(1, '#f4d03f')
+      break
+    case 'mountain':
+      // Mountain landscape
+      gradient.addColorStop(0, '#34495e')
+      gradient.addColorStop(0.3, '#7f8c8d')
+      gradient.addColorStop(0.7, '#95a5a6')
+      gradient.addColorStop(1, '#34495e')
+      break
+    case 'desert':
+      // Desert environment
+      gradient.addColorStop(0, '#f39c12')
+      gradient.addColorStop(0.4, '#e67e22')
+      gradient.addColorStop(0.8, '#d35400')
+      gradient.addColorStop(1, '#f39c12')
+      break
+    case 'ocean':
+      // Ocean/deep sea
+      gradient.addColorStop(0, '#1b4f72')
+      gradient.addColorStop(0.3, '#2e86c1')
+      gradient.addColorStop(0.7, '#5dade2')
+      gradient.addColorStop(1, '#1b4f72')
+      break
+    case 'night':
+      // Night sky
+      gradient.addColorStop(0, '#1a1a2e')
+      gradient.addColorStop(0.4, '#16213e')
+      gradient.addColorStop(0.8, '#0f3460')
+      gradient.addColorStop(1, '#1a1a2e')
+      break
+    case 'indoor':
+      // Indoor lighting
+      gradient.addColorStop(0, '#ecf0f1')
+      gradient.addColorStop(0.5, '#bdc3c7')
+      gradient.addColorStop(1, '#ecf0f1')
+      break
+    case 'warehouse':
+      // Industrial warehouse
+      gradient.addColorStop(0, '#34495e')
+      gradient.addColorStop(0.3, '#2c3e50')
+      gradient.addColorStop(0.7, '#1b2631')
+      gradient.addColorStop(1, '#34495e')
+      break
+    case 'arctic':
+      // Arctic/ice environment
+      gradient.addColorStop(0, '#d5dbdb')
+      gradient.addColorStop(0.4, '#a9cce3')
+      gradient.addColorStop(0.8, '#85c1e9')
+      gradient.addColorStop(1, '#d5dbdb')
+      break
+    case 'tropical':
+      // Tropical paradise
+      gradient.addColorStop(0, '#27ae60')
+      gradient.addColorStop(0.3, '#2ecc71')
+      gradient.addColorStop(0.7, '#58d68d')
+      gradient.addColorStop(1, '#27ae60')
+      break
+    default:
+      gradient.addColorStop(0, '#ffffff')
+      gradient.addColorStop(1, '#ffffff')
+  }
+
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+  // Add some variation
+  for (let i = 0; i < 50; i++) {
+    const x = Math.random() * canvas.width
+    const y = Math.random() * canvas.height
+    const radius = Math.random() * 100 + 20
+    
+    ctx.beginPath()
+    ctx.arc(x, y, radius, 0, 2 * Math.PI)
+    ctx.fillStyle = `rgba(${Math.random() * 50 + 100}, ${Math.random() * 50 + 100}, ${Math.random() * 50 + 100}, 0.1)`
+    ctx.fill()
+  }
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.RepeatWrapping
+  return texture
+}
+
+
+function createLightHelper() {
+  if (lightHelper) return // Already exists
+
+  // Create light position indicator (small sphere)
+  const lightGeometry = new THREE.SphereGeometry(0.05, 8, 8)
+  const lightMaterial = new THREE.MeshBasicMaterial({ 
+    color: fabricMaterial.uniforms.uLightColor.value,
+    transparent: true,
+    opacity: 0.8
+  })
+  lightHelper = new THREE.Mesh(lightGeometry, lightMaterial)
+  lightHelper.position.copy(fabricMaterial.uniforms.uLightPosition.value)
+  scene.add(lightHelper)
+
+  // Create line from light to fabric center
+  const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+    fabricMaterial.uniforms.uLightPosition.value,
+    new THREE.Vector3(0, 0, 0) // Fabric center
+  ])
+  const lineMaterial = new THREE.LineBasicMaterial({ 
+    color: fabricMaterial.uniforms.uLightColor.value,
+    transparent: true,
+    opacity: 0.6
+  })
+  lightHelperLine = new THREE.Line(lineGeometry, lineMaterial)
+  scene.add(lightHelperLine)
+}
+
+function removeLightHelper() {
+  if (lightHelper) {
+    scene.remove(lightHelper)
+    lightHelper.geometry.dispose()
+    lightHelper.material.dispose()
+    lightHelper = null
+  }
+  if (lightHelperLine) {
+    scene.remove(lightHelperLine)
+    lightHelperLine.geometry.dispose()
+    lightHelperLine.material.dispose()
+    lightHelperLine = null
+  }
+}
+
+function updateLightHelper() {
+  if (!lightHelper || !lightHelperLine) return
+
+  // Update light position indicator
+  lightHelper.position.copy(fabricMaterial.uniforms.uLightPosition.value)
+  lightHelper.material.color.copy(fabricMaterial.uniforms.uLightColor.value)
+
+  // Update line geometry
+  const positions = lightHelperLine.geometry.attributes.position.array
+  positions[0] = fabricMaterial.uniforms.uLightPosition.value.x
+  positions[1] = fabricMaterial.uniforms.uLightPosition.value.y
+  positions[2] = fabricMaterial.uniforms.uLightPosition.value.z
+  positions[3] = 0 // Fabric center X
+  positions[4] = 0 // Fabric center Y
+  positions[5] = 0 // Fabric center Z
+  lightHelperLine.geometry.attributes.position.needsUpdate = true
+
+  // Update line color
+  lightHelperLine.material.color.copy(fabricMaterial.uniforms.uLightColor.value)
+}
 
 // Mesh
-const water = new THREE.Mesh(waterGeometry, waterMaterial)
-water.rotation.x = - Math.PI * 0.5
-scene.add(water)
+const fabric = new THREE.Mesh(fabricGeometry, fabricMaterial)
+fabric.rotation.x = - Math.PI * 0.5
+scene.add(fabric)
+
+// Set initial scale for appearing animation
+fabric.scale.setScalar(0)
+
+// Animate fabric appearing with GSAP
+gsap.to(fabric.scale, {
+  x: 1,
+  y: 1,
+  z: 1,
+  delay: 0.4,
+  duration: 7,
+  ease: "back.out(1.7)"
+})
 
 // Debug - Object Transform
 const transformFolder = gui.addFolder('Object Transform')
+transformFolder.close()
 
 // Position controls
-transformFolder.add(water.position, 'x').min(-5).max(5).step(0.01).name('Position X')
-transformFolder.add(water.position, 'y').min(-5).max(5).step(0.01).name('Position Y')
-transformFolder.add(water.position, 'z').min(-5).max(5).step(0.01).name('Position Z')
+transformFolder.add(fabric.position, 'x').min(-5).max(5).step(0.01).name('Position X')
+transformFolder.add(fabric.position, 'y').min(-5).max(5).step(0.01).name('Position Y')
+transformFolder.add(fabric.position, 'z').min(-5).max(5).step(0.01).name('Position Z')
 
 // Rotation controls (in addition to the initial rotation)
 debugObject.rotationX = - Math.PI * 0.5
@@ -456,29 +822,32 @@ debugObject.rotationY = 0
 debugObject.rotationZ = 0
 
 transformFolder.add(debugObject, 'rotationX').min(-Math.PI).max(Math.PI).step(0.01).name('Rotation X')
-  .onChange(() => { water.rotation.x = debugObject.rotationX })
+  .onChange(() => { fabric.rotation.x = debugObject.rotationX })
 transformFolder.add(debugObject, 'rotationY').min(-Math.PI).max(Math.PI).step(0.01).name('Rotation Y')
-  .onChange(() => { water.rotation.y = debugObject.rotationY })
+  .onChange(() => { fabric.rotation.y = debugObject.rotationY })
 transformFolder.add(debugObject, 'rotationZ').min(-Math.PI).max(Math.PI).step(0.01).name('Rotation Z')
-  .onChange(() => { water.rotation.z = debugObject.rotationZ })
+  .onChange(() => { fabric.rotation.z = debugObject.rotationZ })
 
-// Scale controls
-transformFolder.add(water.scale, 'x').min(0.1).max(5).step(0.01).name('Scale X')
-transformFolder.add(water.scale, 'y').min(0.1).max(5).step(0.01).name('Scale Y')
-transformFolder.add(water.scale, 'z').min(0.1).max(5).step(0.01).name('Scale Z')
+// Delay GUI scale controls initialization to prevent interference
+setTimeout(() => {
+  // Scale controls
+  transformFolder.add(fabric.scale, 'x').min(0.1).max(5).step(0.01).name('Scale X')
+  transformFolder.add(fabric.scale, 'y').min(0.1).max(5).step(0.01).name('Scale Y')
+  transformFolder.add(fabric.scale, 'z').min(0.1).max(5).step(0.01).name('Scale Z')
 
-// Uniform scale
-debugObject.uniformScale = 1
-transformFolder.add(debugObject, 'uniformScale').min(0.1).max(5).step(0.01).name('Uniform Scale')
-  .onChange(() => {
-    water.scale.set(debugObject.uniformScale, debugObject.uniformScale, debugObject.uniformScale)
-  })
+  // Uniform scale
+  debugObject.uniformScale = 1
+  transformFolder.add(debugObject, 'uniformScale').min(0.1).max(5).step(0.01).name('Uniform Scale')
+    .onChange(() => {
+      fabric.scale.set(debugObject.uniformScale, debugObject.uniformScale, debugObject.uniformScale)
+    })
+}, 100)
 
 // Reset transform button
 debugObject.resetTransform = () => {
-  water.position.set(0, 0, 0)
-  water.rotation.set(-Math.PI * 0.5, 0, 0)
-  water.scale.set(1, 1, 1)
+  fabric.position.set(0, 0, 0)
+  fabric.rotation.set(-Math.PI * 0.5, 0, 0)
+  fabric.scale.set(1, 1, 1)
   debugObject.rotationX = -Math.PI * 0.5
   debugObject.rotationY = 0
   debugObject.rotationZ = 0
@@ -514,7 +883,7 @@ window.addEventListener('resize', () =>
  */
 // Base camera
 const camera = new THREE.PerspectiveCamera(75, sizes.width / sizes.height, 0.1, 100)
-camera.position.set(1, 1, 1)
+camera.position.set(1.65, 0, 0)
 scene.add(camera)
 
 // Controls
@@ -531,6 +900,7 @@ controls.minPolarAngle = 0
 
 // Debug - Camera Controls
 const cameraFolder = gui.addFolder('Camera')
+cameraFolder.close()
 
 // Camera position (listen to changes)
 cameraFolder.add(camera.position, 'x').min(-10).max(10).step(0.1).name('Camera X').listen()
@@ -548,7 +918,7 @@ cameraFolder.add(controls.target, 'z').min(-5).max(5).step(0.1).name('Target Z')
 
 // Reset camera button
 debugObject.resetCamera = () => {
-  camera.position.set(1, 1, 1)
+  camera.position.set(3, 0, 0)
   camera.fov = 75
   camera.updateProjectionMatrix()
   controls.target.set(0, 0, 0)
@@ -576,21 +946,17 @@ try {
     renderer.outputEncoding = THREE.sRGBEncoding
   }
   renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.0
   // physicallyCorrectLights was removed in r150+
   if (renderer.physicallyCorrectLights !== undefined) {
     renderer.physicallyCorrectLights = true
   }
-  // Use useLegacyLights = false for newer versions
+  // Use useLegacy.s = false for newer versions
   if (renderer.useLegacyLights !== undefined) {
     renderer.useLegacyLights = false
   }
 } catch (e) {
   console.warn('Some renderer properties not available in this Three.js version:', e)
 }
-
-// Add tone mapping control to GUI (after renderer is created)
-appearanceFolder.add(renderer, 'toneMappingExposure').min(0.5).max(2).step(0.1).name('Exposure')
 
 // Add renderer reset function to the existing reset appearance
 const originalResetAppearance = debugObject.resetAppearance
@@ -608,8 +974,8 @@ const tick = () =>
 {
     const elapsedTime = clock.getElapsedTime()
 
-    // Update water
-    waterMaterial.uniforms.uTime.value = elapsedTime
+    // Update fabric
+    fabricMaterial.uniforms.uTime.value = elapsedTime
 
     // Update controls
     controls.update()

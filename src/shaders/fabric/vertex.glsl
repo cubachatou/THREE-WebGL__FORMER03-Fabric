@@ -14,6 +14,8 @@ uniform float uFabricDrape;
 varying float vElevation;
 varying vec2 vUv;
 varying vec3 vViewPosition;
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
 
 // 
 // Classic Perlin 3D Noise 
@@ -139,4 +141,6 @@ void main() {
   vElevation = elevation;
   vUv = uv;
   vViewPosition = viewPosition.xyz;
+  vWorldPosition = modelPosition.xyz;
+  vWorldNormal = normalize(mat3(modelMatrix) * normal);
 }
